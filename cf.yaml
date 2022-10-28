@@ -1,0 +1,123 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: AWS CloudFormation Template that creates role & lambda function
+
+Parameters:
+
+  Namespace:
+    Default: mywizard-dmt
+    Description: Organization name or abbreviation. Eg. dmt - DevOps Multi-Tenant, dft - DevOps Fleet Tenant.
+    Type: String
+    AllowedValues:
+      - mywizard-dmt
+      - mywizard-dft
+      - nishant-dmt
+
+  Environment:
+    Default: uat
+    Description: 'Name of the Environment. Eg. Dev, UAT or Prd.'
+    Type: String
+    AllowedValues:
+      - dev
+      - uat
+      - prd
+
+  LambdaName:
+    Type: String
+    Default: jenkins-widget
+
+Resources:
+  
+  LambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub "${Namespace}-widget-${Environment}-iam-role"
+      Tags:
+        - Key: namespace
+          Value: !Ref Namespace
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+  LambdaRolePolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: !Sub "${Namespace}-widget-${Environment}-iam-policy"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'ec2:DescribeInstances'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - 'cloudwatch:PutDashboard'
+              - 'cloudwatch:GetDashboard'
+              - 'cloudwatch:DeleteDashboards'
+            Resource: !Sub 'arn:aws:cloudwatch::${AWS::AccountId}:dashboard/*'
+          - Effect: Allow
+            Action: 
+              - 'logs:CreateLogGroup'
+            Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*'
+          - Effect: Allow
+            Action:
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*'
+              
+      Roles:
+        - Ref: LambdaRole
+
+  
+  EventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${Namespace}-jenkins-widget-${Environment}-rule"
+      
+      EventPattern:
+        source:
+          - aws.ec2
+        detail-type:
+          - EC2 Instance State-change Notification          
+        detail:
+          state:
+            - pending
+            - terminated
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt 
+            - LambdaFunction
+            - Arn
+          Id: Lambda_Function
+
+  PermissionForEventsToInvokeLambda: 
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: !Ref "LambdaFunction"
+      Action: 'lambda:InvokeFunction'
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt
+        - "EventRule"
+        - "Arn"
+        
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.7
+      Tags:
+        - Key: namespace
+          Value: !Ref Namespace
+      FunctionName: !Sub "${Namespace}-${Environment}-${LambdaName}-function"
+      Timeout: 70
+      Role: !GetAtt LambdaRole.Arn
+      Handler: index.lambda_handler
+      Code:
+        S3Bucket: !Sub "${Namespace}-${Environment}-deployment-s3-bucket"
+        S3Key: cje/lambda/index.zip
